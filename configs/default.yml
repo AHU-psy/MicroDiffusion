@@ -1,0 +1,52 @@
+data:
+  root: data
+  train_manifest: ../datasets/train_pairs.txt
+  validation_manifest: ../datasets/validation_pairs.txt
+  patch_size: 256
+  num_workers: 0
+model:
+  diffusion_class: MicroDiffusion
+  architecture: microdiffusion
+  ch: 32
+  noise_width: 32
+  ch_mult: [1, 2, 2]
+  num_res_blocks: 1
+  dropout: 0.0
+  resamp_with_conv: true
+  illumination_size: 96
+  ema_rate: 0.999
+prior:
+  grid_size: 8
+  entropy: 0.08
+  max_gain: 8.0
+  fallback_mean: 0.42
+noise:
+  block_size: 32
+  flat_fraction: 0.25
+  min_std: 0.002
+  max_std: 0.08
+  max_correction: 0.12
+degradation:
+  identity_probability: 0.1
+  dark_tail_probability: 0.1
+  chroma_std: 0.02
+diffusion:
+  noise_steps: 4
+  brightness_steps: 4
+loss:
+  synthetic: 1.0
+  prior: 1.0
+  transport: 1.0
+training:
+  batch_size: 4
+  n_epochs: 200
+  warmup_steps: 1000
+  ramp_steps: 1000
+optim:
+  lr: 0.0001
+  weight_decay: 0.0
+  amsgrad: false
+  eps: 1.0e-8
+ablation:
+  variant: full
+  fixed_noise_std: 0.01

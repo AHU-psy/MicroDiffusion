@@ -1,0 +1,1 @@
+# One low-light and normal-light image path per line, relative to data/.

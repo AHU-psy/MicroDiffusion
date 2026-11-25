@@ -1,0 +1,2 @@
+# One low-light and normal-light image path per line, relative to data/.
+# Example: low/scene_001.png normal/scene_001.png
