@@ -2,7 +2,7 @@
 
 Code of Weakly Paired Illumination Prior-Guided Low-Light Enhancement of Transmission-Line Monitoring Images.
 
-![Model architecture](assets/comparison.jpg)
+![Model architecture](assets/framework.jpg)
 
 ## Qualitative comparison
 
