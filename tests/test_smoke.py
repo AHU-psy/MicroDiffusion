@@ -19,6 +19,8 @@ class ModelSmokeTest(unittest.TestCase):
         config = train.load_config(config_path)
         config.data.patch_size = 32
         config.model.illumination_size = 32
+        config.training.warmup_steps = 0
+        config.training.ramp_steps = 1
         with tempfile.TemporaryDirectory() as temporary:
             temporary = Path(temporary)
             data = temporary / "data"
@@ -45,24 +47,26 @@ class ModelSmokeTest(unittest.TestCase):
                 "model": vars(config.model), "prior": vars(config.prior), "noise": vars(config.noise),
                 "degradation": vars(config.degradation), "diffusion": vars(config.diffusion),
                 "loss": vars(config.loss), "training": vars(config.training),
-                "optim": vars(config.optim),
-                "ablation": vars(config.ablation)}, sort_keys=False), encoding="utf-8")
+                "optim": vars(config.optim)}, sort_keys=False), encoding="utf-8")
 
-            previous_root, previous_argv = train.ROOT, __import__("sys").argv
+            previous_root, previous_argv = train.ROOT, sys.argv
             try:
                 train.ROOT = temporary
-                __import__("sys").argv = ["train.py", "--config", str(temporary_config)]
+                sys.argv = ["train.py", "--config", str(temporary_config)]
                 train.main()
                 checkpoint = temporary / "checkpoints" / "model_latest.pth.tar"
+                sys.argv = ["train.py", "--config", str(temporary_config),
+                            "--resume", str(checkpoint), "--epochs", "2"]
+                train.main()
                 output_path = temporary / "enhanced.png"
-                __import__("sys").argv = ["test.py", "--config", str(temporary_config),
+                sys.argv = ["test.py", "--config", str(temporary_config),
                                          "--checkpoint", str(checkpoint), "--input", str(low_path),
                                          "--output", str(output_path)]
                 inference.main()
                 self.assertTrue(output_path.is_file())
                 self.assertGreater(output_path.stat().st_size, 0)
             finally:
-                train.ROOT, __import__("sys").argv = previous_root, previous_argv
+                train.ROOT, sys.argv = previous_root, previous_argv
 
 
 if __name__ == "__main__":

@@ -47,6 +47,3 @@ optim:
   weight_decay: 0.0
   amsgrad: false
   eps: 1.0e-8
-ablation:
-  variant: full
-  fixed_noise_std: 0.01

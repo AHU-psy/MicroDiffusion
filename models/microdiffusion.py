@@ -131,7 +131,6 @@ class ReliableSceneTeacher(nn.Module):
         self.entropy = cfg.entropy
         self.max_log_gain = math.log(cfg.max_gain)
         self.fallback_mean = cfg.fallback_mean
-        self.variant = 'full'
 
     @staticmethod
     def _ranks(values):
@@ -165,11 +164,6 @@ class ReliableSceneTeacher(nn.Module):
     @torch.no_grad()
     def forward(self, low, normal, size):
         low_l, low_d, low_q = self._patches(low)
-        if self.variant == 'low_only_prior':
-            gain = (self.fallback_mean / low_l.clamp_min(0.02)).log().clamp(0, self.max_log_gain)
-            gain = gain.reshape(-1, 1, self.grid, self.grid)
-            gain = torch.cat((gain[:, :, 1:2], gain[:, :, 1:-1], gain[:, :, -2:-1]), dim=2)
-            return resize(gain, size), low.new_zeros(low.shape[0], 1, *size)
         high_l, high_d, high_q = self._patches(normal)
         coordinates = torch.linspace(0, 1, self.grid, device=low.device)
         yy = coordinates[:, None].expand(-1, self.grid)
@@ -177,9 +171,6 @@ class ReliableSceneTeacher(nn.Module):
         points = torch.stack((yy.flatten(), xx.flatten()), dim=1)
         spatial = (points[:, None] - points[None, :]).square().sum(-1)
         distance = (low_d[:, :, None] - high_d[:, None, :]).abs().mean(-1)
-        if self.variant == 'rank_only_ot':
-            spatial = torch.zeros_like(spatial)
-            distance = torch.zeros_like(distance)
         reliability = torch.exp(-distance / 0.15) * torch.exp(-spatial[None] / 0.3)
         cost = 0.3 * (self._ranks(low_l)[:, :, None] - self._ranks(high_l)[:, None, :]).abs()
         cost = cost + spatial[None] + distance
@@ -203,9 +194,6 @@ class ReliableSceneTeacher(nn.Module):
         fallback = to_gain(torch.full_like(low_l, self.fallback_mean))
         global_gain = scene_confidence * to_gain(quantile) + (1 - scene_confidence) * fallback
         gain = confidence * to_gain(transported) + (1 - confidence) * global_gain
-        if self.variant == 'no_reliability':
-            gain = to_gain(transported)
-            confidence = torch.ones_like(confidence)
         gain = gain.reshape(-1, 1, self.grid, self.grid)
         # Excluded overlay rows have no light target of their own. Extend the
         # interior gain instead of lifting them independently to fallback_mean,
@@ -232,13 +220,10 @@ class MicroDiffusionNet(nn.Module):
         nn.init.zeros_(self.noise.output.bias)
         self.prior = IlluminationPrior(config.model.ch, self.max_log_gain)
         self.teacher = ReliableSceneTeacher(config.prior)
-        self.teacher.variant = config.ablation.variant
         light_config = copy.deepcopy(config)
         light_config.data.conditional = False
         light_config.model.in_channels, light_config.model.out_ch = 8, 1
         self.brightness = DiffusionUNet(light_config)
-        if config.ablation.variant == 'no_refinement':
-            self.brightness.requires_grad_(False)
         nn.init.zeros_(self.brightness.conv_out.weight)
         nn.init.zeros_(self.brightness.conv_out.bias)
 
@@ -261,17 +246,11 @@ class MicroDiffusionNet(nn.Module):
         return light, reflectance, noise, structure
 
     def _correction_bound(self, noise, structure):
-        if self.config.ablation.variant == 'fixed_noise_bound':
-            noise = torch.full_like(noise, self.config.ablation.fixed_noise_std)
-        if self.config.ablation.variant == 'no_edge_bound':
-            structure = torch.zeros_like(structure)
         bound = (CORRECTION_FLOOR + CORRECTION_SIGMAS * noise).clamp(
             max=self.config.noise.max_correction)
         return bound * (1 - EDGE_PROTECTION * structure)
 
     def _residual(self, state, time, low_log_light, reflectance, gain, confidence, structure):
-        if self.config.ablation.variant == 'no_refinement':
-            return -gain
         condition = torch.cat((state, low_log_light, reflectance, gain, confidence, structure), dim=1)
         correction = 0.25 * self.max_log_gain * torch.tanh(self.brightness(condition, 1000 * time))
         return -(gain + correction).clamp(0, self.max_log_gain)
@@ -340,8 +319,6 @@ class MicroDiffusionNet(nn.Module):
         normal = inputs[:, 3:6].detach()
         target_gain, target_confidence = self.teacher(low, normal, size)
         reliability = 0.2 + 0.8 * target_confidence
-        if self.config.ablation.variant == 'no_reliability':
-            reliability = torch.ones_like(target_confidence)
         prior_loss = image_mean((gain - target_gain).abs(), reliability)
         prior_loss = prior_loss + 0.1 * image_mean(F.binary_cross_entropy(confidence, target_confidence, reduction="none"))
         time = torch.rand(low.shape[0], device=low.device)
@@ -400,10 +377,7 @@ class MicroDiffusion:
     def noise_estimation_loss(self, output):
         terms = {name: value.mean() for name, value in output.items()}
         cfg = self.config
-        if cfg.ablation.variant == 'no_eta_ramp':
-            ramp = 1.0
-        else:
-            ramp = min(1.0, max(0.0, (self.step - cfg.training.warmup_steps) / cfg.training.ramp_steps))
+        ramp = min(1.0, max(0.0, (self.step - cfg.training.warmup_steps) / cfg.training.ramp_steps))
         noise = cfg.loss.synthetic * terms["synthetic"]
         guidance = cfg.loss.prior * terms["prior"] + ramp * cfg.loss.transport * terms["transport"]
         self.last_loss_terms = {name: value.detach() for name, value in terms.items()}
@@ -443,8 +417,10 @@ class MicroDiffusion:
             options["weights_only"] = False
         checkpoint = torch.load(load_path, **options)
         saved = checkpoint.get("config")
-        if (getattr(getattr(saved, "model", None), "diffusion_class", None) != "MicroDiffusion" or
-                getattr(saved.model, "architecture", None) != ARCHITECTURE):
+        saved_model = getattr(saved, "model", None)
+        identity = (getattr(saved_model, "diffusion_class", None),
+                    getattr(saved_model, "architecture", None))
+        if identity not in {("MicroDiffusion", ARCHITECTURE), ("MicroDiffusionV7", "paper_ablation_v7")}:
             raise ValueError("Checkpoint is not a compatible MicroDiffusion checkpoint")
         fields = (("model", ("ch", "noise_width", "ch_mult", "num_res_blocks", "illumination_size")),
                   ("prior", tuple(vars(self.config.prior))), ("noise", tuple(vars(self.config.noise))))
