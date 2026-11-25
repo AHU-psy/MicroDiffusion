@@ -1,8 +1,8 @@
 # MicroDiffusion
 
-Code of Weakly Paired Illumination Prior-Guided Low-Light Enhancement of Transmission-Line Monitoring Images.
+Code of Weakly Paired Illumination Prior-Guided Low-Light Enhancement of Transmission-Line Monitoring Images.
 
-![Model architecture](assets/architecture.jpg)
+![Model architecture](assets/comparison.jpg)
 
 ## Qualitative comparison
 
